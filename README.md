@@ -38,6 +38,7 @@ make run
 |---|---|
 | `make verify` | sanity-check the extracted game |
 | `make audit` | find missing / unused assets (`notes/assets.md`) |
+| `make fetch-yno` | fetch the community English translation (see below) |
 | `make translate` / `make run-en` | build and play the English translation |
 | `make content-status` / `content-export` | save your edits as diffs in `content/` |
 | `make content-apply` | apply someone else's `content/` to your `xml/` |
@@ -46,6 +47,19 @@ make run
 
 After running `make extract` again, run `make data`: your `xml/` edits are
 kept, and the next `make data` rebuilds them (about a minute).
+
+## English
+
+```sh
+make fetch-yno && make run-en
+```
+
+This plays the game with the community English translation used by the
+browser version ([YNOproject](https://github.com/ynoproject/ynotranslations)),
+including its translated images. It is fetched into `external/` and never
+committed: that repository has no licence and asks not to re-upload its
+translations. Coverage, credits and Yume 2kki's translation guidelines are in
+`notes/translation.md`.
 
 ## Good to know
 

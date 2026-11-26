@@ -8,6 +8,7 @@
 #   make audit     resolve every asset reference, report missing/unused
 #   make map-tree  analyse/prune the map tree (report only)
 #   make prune-tree apply the pruned map tree and rebuild RPG_RT.lmt
+#   make fetch-yno fetch YNOproject's community translation (gitignored)
 #   make translate generate translation/<lang>/*.po (EasyRPG Player)
 #   make run-en    run the game with the English translation
 #   make patch-liblcf apply the optional upstream CR fix and rebuild
@@ -28,6 +29,15 @@ PREFIX  ?= $(BUILD)/prefix
 TRANSLATION ?= translation
 TR_LANG ?= en
 
+# YNOproject community translation (what the browser version uses). Fetched
+# into external/, never committed: the repo has no licence and its README
+# asks not to re-upload translations. `make translate` imports it if present.
+YNO_REPO     ?= https://github.com/ynoproject/ynotranslations
+YNO_REF      ?= master
+YNO_DIR      ?= external/ynotranslations
+YNO_LANG_DIR  = $(YNO_DIR)/2kki/$(TR_LANG)
+TR_IMPORT    ?= $(if $(wildcard $(YNO_LANG_DIR)/meta.ini),$(YNO_LANG_DIR))
+
 LCF2XML        ?= $(BUILD)/liblcf/lcf2xml
 PLAYER         ?= $(BUILD)/player/easyrpg-player
 LIBLCF_CONFIG  ?= $(PREFIX)/lib/cmake/liblcf/liblcf-config.cmake
@@ -38,7 +48,7 @@ CONTENT_ARGS    = --xml $(XML) --content content --manifest $(MANIFEST) \
 CMAKE_FLAGS := -G Ninja -DCMAKE_BUILD_TYPE=Release
 
 .PHONY: all extract xml data player run run-en verify audit map-tree prune-tree \
-	translate patch-liblcf content-baseline content-status content-export \
+	translate fetch-yno patch-liblcf content-baseline content-status content-export \
 	content-apply content-check ensure-extracted submodules test clean \
 	distclean help
 
@@ -122,7 +132,21 @@ run: ensure-extracted $(PLAYER)
 
 # ----------------------------------------------------------- translation ---
 translate: ensure-extracted
-	$(PYTHON) scripts/translate.py --xml $(XML) --out $(TRANSLATION) --lang $(TR_LANG)
+	$(PYTHON) scripts/translate.py --xml $(XML) --out $(TRANSLATION) --lang $(TR_LANG) \
+		$(foreach d,$(TR_IMPORT),--import $(d))
+
+# Sparse, shallow clone of only 2kki/<lang>; re-run to update.
+fetch-yno:
+	@if [ -d $(YNO_DIR)/.git ]; then \
+		git -C $(YNO_DIR) sparse-checkout add 2kki/$(TR_LANG) && \
+		git -C $(YNO_DIR) fetch -q --depth 1 origin $(YNO_REF) && \
+		git -C $(YNO_DIR) checkout -q --detach FETCH_HEAD; \
+	else \
+		git clone -q --depth 1 --filter=blob:none --sparse --branch $(YNO_REF) \
+			$(YNO_REPO) $(YNO_DIR) && \
+		git -C $(YNO_DIR) sparse-checkout set 2kki/$(TR_LANG); \
+	fi
+	@echo "YNO translation $$(git -C $(YNO_DIR) log -1 --format='%h (%cs)') in $(YNO_LANG_DIR)"
 
 run-en: ensure-extracted translate $(PLAYER)
 	$(PLAYER) --game $(GAME) --language-path $(TRANSLATION) --language $(TR_LANG)

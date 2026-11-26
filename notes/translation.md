@@ -3,13 +3,15 @@
 Tool: `scripts/translate.py`. Commands:
 
 ```sh
-make translate   # generate translation/en/*.po from xml/
+make fetch-yno   # optional: fetch YNOproject's community translation
+make translate   # generate translation/en/*.po (+ build/translation-report.md)
 make run-en      # play with --language-path translation --language en
 ```
 
 `translation/en/` is gitignored (it contains the game's source text). Only the
 curated `translation/glossary.json` and `translation/overrides.json` are
-committed.
+committed. The fetched community translation lives in `external/` and is
+gitignored too (see below).
 
 ## How EasyRPG Player consumes it
 
@@ -29,33 +31,97 @@ is the `ShowChoiceOption` (`20140`) list joined with `\n`. This matches
 `Translation::RewriteEventCommandMessage` exactly, including the
 `actors.name`, `actors.title` and `strpic` special contexts.
 
+## Importing the community translation (YNOproject)
+
+The browser version of Yume 2kki (YNOproject) uses the community English
+translation in [ynoproject/ynotranslations](https://github.com/ynoproject/ynotranslations)
+(`2kki/en`). It is in the same EasyRPG format this pipeline writes, so
+`make fetch-yno` makes a shallow, sparse clone of just `2kki/<lang>` into
+`external/ynotranslations/`, and `make translate` imports it automatically
+(`--import`).
+
+How the import works (`scripts/translate.py`):
+
+- entries match by context + exact `msgid`: first in the same catalogue
+  file, then anywhere in the set (text that moved between maps or into a
+  common event). Database contexts are normalised (`actors.1.name` ->
+  `actors.name`). Changed text is never guessed at.
+- by default an imported translation **wins**, and `glossary.json` /
+  `overrides.json` fill the gaps, so names and terms match the browser
+  version throughout. `--prefer local` flips this. With the current data, 53
+  of our entries differ from YNO's and are overridden: 29 glossary entries
+  (e.g. `うろつき` "Wanderer" -> "Urotsuki") and all 24 `Map0002` overrides.
+- translated images (`Picture/`, `Panorama/`, `Title/`) are copied into
+  `translation/en/`. Player checks the language folder before the game folder
+  for every asset (`find_generic` in `vendor/Player/src/filefinder.cpp`).
+- the import's `meta.ini` `Description` (its credit line) is kept.
+
+**Licensing:** ynotranslations has no licence file, and its README says "Do
+not upload translations, assets from translations or assets you do not have
+the right for." So its text and images are never committed here: `external/`
+and `translation/*/` are gitignored, and each contributor fetches it
+themselves, just as they supply their own copy of the game.
+
 ## Current coverage
 
-| file | entries |
+Measured on 0.129h + patch1 with ynotranslations `357563d` (2026-11-17):
+
+| | entries |
 |---|---:|
-| `rpg_rt.ldb.po` | 18735 |
-| `rpg_rt.ldb.common.po` | 2617 |
-| `rpg_rt.lmt.po` | 3931 |
-| `Map*.po` (3930 files) | ~10384 |
-| **total** | **35667** |
+| all catalogue entries | 35667 |
+| player-facing entries containing Japanese | **7999** |
+| ... translated | **1648 (20.6%)** |
+| ... untranslated, and also untranslated in YNO's files | 3928 |
+| ... untranslated, not in YNO's files at all | 2423 |
+| editor-only names, not counted (map tree, chipset/animation/terrain) | 3212 |
+| YNO translations unused (text not in this game version) | 6 of 1453 |
+| translated images imported | 336 |
 
-Translated so far: **112 entries (0.31%)**.
+What the numbers mean:
 
-What is already English:
+- **We match the browser version's text.** 1447 of YNO's 1453 translations
+  are used (159 of them found in a different file than in YNO's set); the 6
+  unused ones are text that differs in the newer game version YNO targets.
+- **Most remaining Japanese is Japanese on the browser version too.** YNO's
+  own files contain 9413 entries, only 1453 of them translated. Many of the
+  rest are developer-room notes and debug text (e.g. `Map0191`), or hero
+  names used as hidden string variables (`actors.name` contexts from
+  `ChangeHeroName`).
+- **Some text must stay in Japanese.** Notably the wallpaper gallery
+  (`Map0899`) per the translation guidelines below; the report flags it.
+- **Editor-only names** (map tree, chipsets, animations, terrains) are never
+  shown by RPG Maker 2000. They are still written but not counted, and YNO
+  does not translate them either.
+- Every generated catalogue (and YNO's) parses with Player's own
+  `Dictionary::FromPo`: a test harness linked against the Player build parsed
+  all 3934 files without error, and a deliberately broken file failed.
 
-- all `Terms` UI strings (menu, save/load, yes/no, file prompts, level/HP
-  labels, quit confirmation);
-- the real-room PC menu in `Map0002` (24 curated full-message overrides):
-  wallpaper menu, options, default restore, data/play-record pages, load and
-  quit prompts, shift-key help, sound-test prompts, Time Trial notices;
-- common one-word choices and labels (`はい/いいえ`, `セーブ`, `ロード`,
-  `おきる`, `やめる`, `もどる`, `夢`, `現実`, …), including multi-line choice
-  lists translated line by line;
-- protagonist name `うろつき` -> `Wanderer`.
+`build/translation-report.md` lists the biggest remaining gaps per file.
 
-The whole game has only ~4k unique message lines (Map0001, the debug room,
-accounts for a big chunk), so a complete pass is feasible but is content work,
-not tooling.
+## Translation guidelines (Yume 2kki)
+
+YNO's README links Yume 2kki's own rules, which "must be respected":
+[wikiwiki.jp/yumenikki-g3, 決定事項 > 翻訳ガイドライン](https://wikiwiki.jp/yumenikki-g3/%E6%B1%BA%E5%AE%9A%E4%BA%8B%E9%A0%85#TranslationGuidelines).
+Summarised from that page; read the original before publishing anything
+(this summary went through an automated fetch and is not verbatim):
+
+- a translation must say Yume 2kki is a Yume Nikki fan game that Kikiyama is
+  not involved in, and credit the original staff and the translators;
+- it may not be sold or used for profit; the original staff may require
+  changes to its content or distribution;
+- must translate: `ReadMe.txt` and the prologue shown at new game;
+- must **not** translate: illustration titles and artist names (e.g. the
+  `Map0899` wallpaper gallery) and staff names in the end credits;
+- anything else follows each map's / material's terms
+  (`各マップ、素材の利用規約.txt`) or needs the creator's permission;
+- only translation and its publication are permitted; no added content.
+
+## Credits
+
+English translation of Yume 2kki by the YNOproject translators, as credited
+in the ynotranslations README: aku, Carbonara, FlashfyreDev (Sam), Fonvight,
+IStoleThePies, Jerichi, Kong, Midomido, Nulsdodage (Wavyup) and
+YouArentDistorted (yugamineena).
 
 ## How to add translations
 
@@ -81,7 +147,9 @@ Two mechanisms in `translation/`:
    `scripts/translate.py` keys these by the exact generated `msgid`.
 
 After editing either file run `make translate` again. Do not hand-edit
-`translation/en/*.po`; it is regenerated.
+`translation/en/*.po`; it is regenerated. When YNO's translation is imported
+it wins over these files unless you pass `--prefer local` (run
+`scripts/translate.py` directly, or edit the `translate` target).
 
 ## Caveats
 
@@ -104,7 +172,9 @@ After editing either file run `make translate` again. Do not hand-edit
 
 ## Suggested next pass
 
-1. Translate `Map0002` to 100% (PC menu is the main UI).
-2. Translate the first real dream maps (0004/0005, 0010 door room).
-3. Work through maps by frequency; ~4k unique lines total.
-4. Optionally add a `--freq` report to rank untranslated lines.
+1. Keep `make fetch-yno` up to date; YNO's set is actively maintained.
+2. Translations for what YNO lacks belong upstream in ynotranslations
+   (their README welcomes pull requests), so the browser version benefits
+   too. Check the translation guidelines first.
+3. Use `build/translation-report.md` to pick remaining gaps; skip anything
+   marked as must-stay-original.
