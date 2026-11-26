@@ -117,13 +117,64 @@ class Baseline:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
+def split_lines(text: str) -> list[str]:
+    """Split on "\n" only, keeping it, exactly as `patch` sees lines.
+
+    str.splitlines() also splits on \x0b, \x0c, \x1c-\x1e, \x85, \u2028
+    and \u2029, which would produce hunks that `patch` cannot apply.
+    """
+    lines = text.split("\n")
+    out = [line + "\n" for line in lines[:-1]]
+    if lines[-1]:
+        out.append(lines[-1])
+    return out
+
+
 def diff_files(old: Path, new: Path, rel: str) -> str:
     import difflib
-    old_lines = old.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    new_lines = new.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    diff = difflib.unified_diff(old_lines, new_lines,
-                                fromfile=f"a/{rel}", tofile=f"b/{rel}")
-    return "".join(diff)
+    # newline="": no universal-newline translation, so a stray CR survives.
+    # (open() rather than Path.read_text(newline=...), which needs 3.13.)
+    with old.open(encoding="utf-8", newline="") as fh:
+        old_lines = split_lines(fh.read())
+    with new.open(encoding="utf-8", newline="") as fh:
+        new_lines = split_lines(fh.read())
+    out = []
+    for line in difflib.unified_diff(old_lines, new_lines,
+                                     fromfile=f"a/{rel}", tofile=f"b/{rel}"):
+        # difflib leaves a last line without "\n" as is; patch needs the
+        # marker git and diff(1) emit.
+        if not line.endswith("\n"):
+            line += "\n\\ No newline at end of file\n"
+        out.append(line)
+    return "".join(out)
+
+
+def apply_patch(xml: Path, patch: Path, dry_run: bool) -> tuple[str, str]:
+    """Apply one exported patch to xml/ without ever prompting.
+
+    Returns ("applied" | "already" | "conflict", patch output). Every check
+    is a dry run first, so a patch that does not apply cleanly leaves xml/
+    untouched (no half-applied hunks, no .rej files). A patch that is
+    already applied (content-apply run twice) is reported, not reverted:
+    plain `patch` would ask "Assume -R?" on the terminal.
+    """
+    base = ["patch", "-p1", "--no-backup-if-mismatch",
+            "-d", str(xml), "-i", str(patch.resolve())]
+
+    def run(*extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(base + list(extra), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True)
+
+    fwd = run("--forward", "--dry-run")
+    if fwd.returncode == 0:
+        if not dry_run:
+            res = run("--forward")
+            if res.returncode != 0:
+                return "conflict", res.stdout + res.stderr
+        return "applied", fwd.stdout
+    if run("--reverse", "--force", "--dry-run").returncode == 0:
+        return "already", ""
+    return "conflict", fwd.stdout + fwd.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -244,23 +295,25 @@ def cmd_apply(args) -> int:
     ok = True
     for e in manifest.get("modified", []):
         if e.get("kind") == "full":
-            (xml / e["path"]).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(content / e["file"], xml / e["path"])
+            if not args.dry_run:
+                (xml / e["path"]).parent.mkdir(parents=True, exist_ok=True)
+                # copyfile, not copy2: the copy must get a fresh mtime or
+                # `make data` treats the older checked-out file as up to date.
+                shutil.copyfile(content / e["file"], xml / e["path"])
             print(f"  copy {e['path']}")
             continue
-        patch = content / e["patch"]
-        cmd = ["patch", "-p1", "--no-backup-if-mismatch", "-d", str(xml)]
-        if args.dry_run:
-            cmd.insert(1, "--dry-run")
-        res = subprocess.run(cmd, stdin=patch.open("rb"))
-        if res.returncode != 0:
-            print(f"  FAIL {e['path']}", file=sys.stderr)
+        status, detail = apply_patch(xml, content / e["patch"], args.dry_run)
+        if status == "conflict":
+            print(f"  FAIL {e['path']}\n{detail}", file=sys.stderr)
             ok = False
+        elif status == "already":
+            print(f"  ok   {e['path']} (already applied)")
         else:
             print(f"  patch {e['path']}")
     for e in manifest.get("added", []):
-        (xml / e["path"]).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(content / e["file"], xml / e["path"])
+        if not args.dry_run:
+            (xml / e["path"]).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(content / e["file"], xml / e["path"])
         print(f"  add  {e['path']}")
     for rel in manifest.get("deleted", []):
         p = xml / rel

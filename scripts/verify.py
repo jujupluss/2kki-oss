@@ -39,7 +39,7 @@ def is_mojibake(name: str) -> bool:
 
 
 def find_asset(asset_dir: Path, name: str) -> Path | None:
-    for ext in (".png", ".bmp", ".xyz", ".png"):
+    for ext in (".png", ".bmp", ".xyz"):
         p = asset_dir / (name + ext)
         if p.is_file():
             return p

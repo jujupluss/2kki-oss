@@ -1,147 +1,81 @@
 # Yume 2kki — open-source remake workspace
 
-A reproducible pipeline for working on **Yume 2kki** (RPG Maker 2000) with the
-open-source **EasyRPG Player** and **liblcf** toolchain.
+Tooling to work on **Yume 2kki** (RPG Maker 2000) with the open-source
+[EasyRPG Player](https://github.com/EasyRPG/Player) and
+[liblcf](https://github.com/EasyRPG/liblcf). It converts the game's binary
+maps and database to XML, so they can be diffed, edited and scripted, and
+rebuilds a playable game from that XML.
 
-The game ships thousands of binary LCF files. This workspace extracts them to
-text XML so the game becomes diffable, editable and scriptable, while keeping a
-runnable game directory.
+This repository holds **tooling only**. The game itself is copyrighted and
+never committed: everyone supplies their own copy.
 
-> **Status:** extraction pipeline + Player build verified. All 3932 LCF files
-> convert to XML and back **byte-identically**. The game boots in EasyRPG Player
-> 0.8.1 from `build/game/`. Asset audit and map-tree prune are complete. The
-> CR round-trip fix makes 3921/3930 maps byte-exact (the rest differ only in
-> unused metadata). An English translation pipeline exists and the whole
-> UI/real-room PC menu is translated; the dream-world text is a work in
-> progress (~0.3% of 35k catalogue entries so far).
+## Setup
 
-## Layout
-
-```
-original/                  read-only source (not committed)
-  Yume2kki_ver0.129h/      base game 0.129h
-  Yume2kki_ver0.129h_patch1/  patch 1 (applied on top)
-vendor/liblcf/             LCF <-> XML library + lcf2xml (submodule)
-vendor/Player/             EasyRPG Player (submodule)
-scripts/extract.py         original/ -> build/game + xml/ (+ manifest, report)
-scripts/rebuild.py         xml/ -> build/game LCF (only edited files)
-scripts/verify.py          sanity checks
-scripts/audit.py           asset reference audit (missing / RTP / unused)
-scripts/map_tree.py        analyse / prune the RPG_RT.lmt map tree
-scripts/translate.py       generate EasyRPG Player .po catalogues
-scripts/content.py         baseline/export/apply original XML content
-translation/glossary.json  curated English glossary (terms + phrases)
-translation/overrides.json curated whole-message translations
-content/                   committed diffs + new files for our own content
-notes/encoding.md          CP932/CP866 filename mojibake evidence
-notes/roundtrip.md         XML round-trip fidelity notes
-notes/assets.md            asset audit findings
-notes/map-tree.md          map tree cleanup findings
-notes/translation.md       translation pipeline + English coverage
-build/                     generated (gitignored)
-xml/                       extracted XML, Map*.emu / RPG_RT.edb / RPG_RT.emt
-```
-
-## Quick start
-
-Requirements: CMake ≥ 3.22, Ninja, a C++17 compiler, and the EasyRPG Player
-deps (SDL2, pixman, libpng, zlib, fmt, freetype, harfbuzz, ICU, expat, inih).
-On Debian/Ubuntu the packaged dev packages are enough.
+Requirements: Python ≥ 3.10, GNU `patch`, CMake ≥ 3.22, Ninja, a C++17
+compiler, and EasyRPG Player's libraries (SDL2, pixman, libpng, zlib, fmt,
+freetype, harfbuzz, ICU, expat, inih; the Debian/Ubuntu `-dev` packages work).
 
 ```sh
-make extract     # build lcf2xml, repair names, extract build/game + xml/
-make verify      # sanity checks
-make audit       # resolve every asset reference (missing / RTP / unused)
-make map-tree    # analyse the map tree, write build/pruned/RPG_RT.emt
-make prune-tree  # apply the pruned tree + rebuild RPG_RT.lmt
-make translate   # generate translation/en/*.po
-make player      # build EasyRPG Player -> build/player/easyrpg-player
-make run         # play build/game
-make run-en      # play build/game with the English translation
+git clone --recursive <this repo>
+cd <repo>
+# put the game under original/:
+#   original/Yume2kki_ver0.129h/          base game
+#   original/Yume2kki_ver0.129h_patch1/   patch (any folder with "patch" in its name)
+make extract      # build lcf2xml, fix filenames, create build/game + xml/
+make prune-tree   # remove dead map-tree entries (once, after the first extract)
+make run          # build EasyRPG Player and play build/game
 ```
 
-See `notes/assets.md` for the first audit results (~40 s): 965k references,
-225 genuinely missing names, and 259 unique RTP files the game expects.
-
-Then edit maps/database in `xml/` and rebuild just those:
+## Everyday use
 
 ```sh
-$EDITOR xml/Map0001.emu
-make data        # xml -> build/game/*.lmu (only edited files)
+$EDITOR xml/Map0001.emu   # edit a map (or RPG_RT.edb, the database)
+make data                 # rebuild only what you edited into build/game
 make run
 ```
 
-## Authoring original content
+| command | what it does |
+|---|---|
+| `make verify` | sanity-check the extracted game |
+| `make audit` | find missing / unused assets (`notes/assets.md`) |
+| `make translate` / `make run-en` | build and play the English translation |
+| `make content-status` / `content-export` | save your edits as diffs in `content/` |
+| `make content-apply` | apply someone else's `content/` to your `xml/` |
+| `make test` | run the test suite (no game data needed) |
+| `make help` | list every target |
 
-The base data is not committed. Our own edits are stored as diffs:
+After running `make extract` again, run `make data`: your `xml/` edits are
+kept, and the next `make data` rebuilds them (about a minute).
 
-```sh
-make content-baseline   # once, after extract + prune-tree
-make content-status     # modified / added / deleted XML
-make content-export     # write content/patches + content/files
-```
+## Good to know
 
-A collaborator bootstraps and applies it with:
+- **`original/` is read-only.** Images, music and sounds in `build/game` are
+  hardlinks into it to save ~7 GiB, so don't edit them in place. Put new
+  assets in `content/assets/`, or extract with
+  `python3 scripts/extract.py --copy`.
+- **Filenames:** the archive was unpacked with the wrong codepage, so
+  Japanese names in `original/` look garbled (`ВфВ▀2В┴Вл` = `ゆめ2っき`).
+  `make extract` fixes them; see `notes/encoding.md`.
+- **RTP:** the game expects the RPG Maker 2000 RTP for default sounds and
+  battle graphics. Install it, or pass `--rtp-path` / set `RPG2K_RTP_PATH`.
+  It runs without it, minus those sounds.
 
-```sh
-make extract && make prune-tree
-make content-apply
-```
+## Documentation
 
-See `content/README.md` for details.
+| file | topic |
+|---|---|
+| `content/README.md` | sharing your own maps and events as diffs |
+| `notes/translation.md` | translation pipeline and coverage |
+| `notes/roundtrip.md` | LCF ⇄ XML fidelity |
+| `notes/map-tree.md` | map-tree cleanup |
+| `notes/assets.md`, `notes/audit.md` | asset and content audits |
+| `notes/encoding.md` | the filename encoding problem |
 
-## Important: filename encoding
+## Licensing
 
-The archive was unpacked with **CP932 bytes decoded as CP866**, so every
-Japanese filename in `original/` is mojibake (`ВфВ▀2В┴Вл` = `ゆめ2っき`).
-EasyRPG Player cannot find assets under those names, because the LDB/LMU still
-reference the original CP932 names.
-
-`make extract` repairs filenames (`CP866 -> CP932`) and writes
-`[EasyRPG] Encoding=932` into `build/game/RPG_RT.ini` so the Player does not
-fall back to codepage 1252.
-
-Details and evidence: [`notes/encoding.md`](notes/encoding.md).
-
-## Warnings
-
-- `original/` is **read-only**. Never write to it. `build/game` gets copies of
-  LCF files (not hardlinks) precisely so a rebuild cannot corrupt the source.
-- EasyRPG Player auto-detects the engine as RPG Maker 2000. Pass
-  `--encoding 932` manually if you run a game dir that lacks the patched ini.
-- The game expects the **RPG Maker 2000 RTP** (19k references, 259 unique
-  names: default SE, battle animations/backdrops). Install an RTP or pass
-  `--rtp-path` / set `RPG2K_RTP_PATH`. Without it the game runs, but many
-  sounds and battle backdrops are silent/missing.
-- The 0.129h + patch1 combination is what gets extracted. If you add another
-  patch, drop it under `original/` with `patch` in the directory name and
-  re-run `make extract`.
-
-## Licensing reality check
-
-This repository contains **tooling**, not game content:
-
-- EasyRPG Player: GPLv3. liblcf: MIT. Both are vendored as submodules.
-- Yume 2kki assets, maps and events are © their respective creators.
-  `read_me.txt` and `document/copyright.txt` explicitly prohibit
-  redistribution and secondary use without permission.
-
-Therefore `original/`, `build/` and `xml/` are gitignored. Every contributor
-must supply their own copy of the game. If the goal is a *fully redistributable*
-open-source game, the assets and map data have to be replaced with original or
-permissively licensed content — that is a separate, much larger content effort.
-
-## Next steps
-
-Done: asset audit (`notes/assets.md`), map-tree prune (`notes/map-tree.md`),
-translation pipeline (`notes/translation.md`), CR round-trip fix
-(`notes/roundtrip.md`), original-content tracking (`content/README.md`).
-
-1. **RTP:** install the RPG Maker 2000 RTP (or point `--rtp-path` at one) so
-   default SE, battle animations and backdrops resolve.
-2. **Finish the English pass:** map-by-map, starting with the PC menu and the
-   first dream maps. ~4k unique lines remain.
-3. **Map index:** graph of teleports, connections and common-event calls so the
-   map tree is navigable in text.
-4. **Author:** use `content/` to add new maps/events; keep the base assets out
-   of the repo.
+- This repository's scripts, docs and tests: MIT (`LICENSE`).
+- EasyRPG Player (GPLv3) and liblcf (MIT) are git submodules under `vendor/`.
+- Yume 2kki's assets, maps and text belong to their creators; the game's
+  `read_me.txt` and `document/copyright.txt` forbid redistribution without
+  permission. That is why `original/`, `build/` and `xml/` are gitignored.
+  A redistributable game would need all-original content.

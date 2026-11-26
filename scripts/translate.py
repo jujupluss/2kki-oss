@@ -66,14 +66,14 @@ def po_escape(s: str) -> str:
 
 
 def write_po(path: Path, entries: list[tuple[str, str]], glossary: "Glossary",
-             terms: bool = False) -> tuple[int, int]:
+             terms: bool = False, lang: str = "en") -> tuple[int, int]:
     seen: set[tuple[str, str]] = set()
     total = translated = 0
     lines = [
         'msgid ""',
         'msgstr ""',
         '"Project-Id-Version: yume2kki-oss\\n"',
-        '"Language: en\\n"',
+        f'"Language: {lang}\\n"',
         '"Content-Type: text/plain; charset=UTF-8\\n"',
         "",
     ]
@@ -276,11 +276,12 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     meta = glossary.meta
+    lang_code = meta.get("code", args.lang)
     (out / "meta.ini").write_text(
         "[Language]\n"
         f"Name={meta.get('name', 'English')}\n"
         f"Description={meta.get('description', '')}\n"
-        f"Code={meta.get('code', args.lang)}\n"
+        f"Code={lang_code}\n"
         f"Term={meta.get('term', 'Language')}\n"
         f"GameTitle={meta.get('game_title', 'Yume 2kki')}\n",
         encoding="utf-8",
@@ -290,7 +291,7 @@ def main() -> int:
     per_file: dict[str, dict[str, int]] = {}
 
     def emit(name: str, entries, terms=False):
-        n, t = write_po(out / name, entries, glossary, terms=terms)
+        n, t = write_po(out / name, entries, glossary, terms=terms, lang=lang_code)
         totals["files"] += 1
         totals["entries"] += n
         totals["translated"] += t

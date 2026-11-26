@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,8 +91,18 @@ def choose_roots(src: Path) -> tuple[Path, list[Path]]:
     def lmu_count(p: Path) -> int:
         return sum(1 for _ in p.glob("*.lmu"))
 
-    base_candidates = [p for p in roots if "patch" not in str(p).lower()]
-    patch_roots = [p for p in roots if "patch" in str(p).lower()]
+    # Judge "patch" by the path *inside* src only: the checkout itself may
+    # live under a directory such as ~/2kki-patches/.
+    def is_patch(p: Path) -> bool:
+        return "patch" in str(p.relative_to(src)).lower()
+
+    def natural_key(p: Path) -> list:
+        # patch2 before patch10, so overlays apply in release order.
+        return [int(t) if t.isdigit() else t.lower()
+                for t in re.split(r"(\d+)", str(p.relative_to(src)))]
+
+    base_candidates = [p for p in roots if not is_patch(p)]
+    patch_roots = sorted((p for p in roots if is_patch(p)), key=natural_key)
 
     if not base_candidates:
         # everything lives under a patch-named dir; fall back to the biggest
@@ -162,20 +173,30 @@ def write_ini(src_ini: Path, dst_ini: Path, dry: bool) -> None:
         text += "\n[EasyRPG]\nEncoding=932\n"
     if not dry:
         dst_ini.parent.mkdir(parents=True, exist_ok=True)
+        # dst may be a hardlink to original/ (place() links non-LCF files);
+        # writing through it would modify the read-only source.
+        if dst_ini.exists() or dst_ini.is_symlink():
+            dst_ini.unlink()
         dst_ini.write_bytes(text.encode(TARGET_ENC))
 
 
 def convert_lcf_to_xml(game_dir: Path, xml_dir: Path, lcf2xml: Path,
                        force_xml: bool, maps_limit: int, no_cr_escape: bool,
-                       dry_run: bool) -> tuple[list[Path], int, int, int]:
-    """Convert every LCF file in game_dir to XML in xml_dir."""
+                       dry_run: bool
+                       ) -> tuple[list[Path], int, int, int, set[Path]]:
+    """Convert every LCF file in game_dir to XML in xml_dir.
+
+    Returns (xml files, xml bytes, cached count, CR-escaped count, the set
+    of LCF paths whose XML was (re)generated in this run).
+    """
     xml_files: list[Path] = []
     xml_bytes = 0
     xml_skipped = 0
     cr_escaped = 0
+    converted: set[Path] = set()
     if not lcf2xml.is_file():
         print(f"warning: lcf2xml not found at {lcf2xml}; skipping XML", file=sys.stderr)
-        return xml_files, xml_bytes, xml_skipped, cr_escaped
+        return xml_files, xml_bytes, xml_skipped, cr_escaped, converted
 
     xml_dir.mkdir(parents=True, exist_ok=True)
     lcf_files = sorted(
@@ -215,11 +236,40 @@ def convert_lcf_to_xml(game_dir: Path, xml_dir: Path, lcf2xml: Path,
                 out = xml_dir / (p.stem + XML_EXT[p.suffix.lower()])
                 if out.is_file() and escape_cr_in_xml(out):
                     cr_escaped += 1
+        converted.update(batch)
         print(f"  converted {min(i + chunk, len(todo))}/{len(todo)}")
 
     xml_files = sorted(xml_dir.glob("*"))
     xml_bytes = sum(p.stat().st_size for p in xml_files if p.is_file())
-    return xml_files, xml_bytes, xml_skipped, cr_escaped
+    return xml_files, xml_bytes, xml_skipped, cr_escaped, converted
+
+
+def sync_lcf_mtimes(lcf_files: list[Path], xml_dir: Path,
+                    converted: set[Path]) -> int:
+    """Set LCF mtimes so ``make data`` (rebuild.py) does the right thing.
+
+    rebuild.py rebuilds an LCF file when its XML is newer. After this run:
+
+    * XML converted in this run matches its LCF byte for byte: mark the
+      LCF fresh so untouched maps keep their exact original bytes.
+    * XML that was *cached* may hold edits (or the pruned map tree) that
+      the freshly copied original LCF does not: mark the LCF older than
+      its XML so the next ``make data`` rebuilds it.
+
+    Returns the number of LCF files left stale.
+    """
+    stale = 0
+    for lcf in lcf_files:
+        if lcf.suffix.lower() not in LCF_EXTS or not lcf.is_file():
+            continue
+        xml = xml_dir / (lcf.stem + XML_EXT[lcf.suffix.lower()])
+        if lcf in converted or not xml.is_file():
+            os.utime(lcf, None)
+        else:
+            t = xml.stat().st_mtime_ns - 1_000_000_000
+            os.utime(lcf, ns=(t, t))
+            stale += 1
+    return stale
 
 
 # --------------------------------------------------------------------------
@@ -254,21 +304,24 @@ def main() -> int:
     xml_dir = Path(args.xml).resolve()
     lcf2xml = Path(args.lcf2xml).resolve()
 
-    if not src.is_dir():
-        sys.exit(f"error: source dir not found: {src}")
-
     if args.xml_only:
         try:
-            files, nbytes, skipped, escaped = convert_lcf_to_xml(
+            files, nbytes, skipped, escaped, converted = convert_lcf_to_xml(
                 game_dir, xml_dir, lcf2xml, args.force_xml, args.maps_limit,
                 args.no_cr_escape, args.dry_run)
         except RuntimeError as exc:
             sys.exit(f"error: {exc}")
+        # Freshly converted XML matches the LCF it came from.
+        if not args.dry_run:
+            for lcf in converted:
+                os.utime(lcf, None)
         print()
         print(f"XML files {len(files)} ({nbytes / 1048576:.1f} MiB), "
               f"{skipped} cached, {escaped} CR-escaped")
         return 0
 
+    if not src.is_dir():
+        sys.exit(f"error: source dir not found: {src}")
     base, patch_roots = choose_roots(src)
     print(f"base game root : {base}")
     for p in patch_roots:
@@ -343,9 +396,13 @@ def main() -> int:
     for s, d, _ch, _layer in patch_plan:
         place(s, d, args.copy, args.dry_run)
 
-    ini_src = base / INI_NAME
+    # Patch layers override the base, so the last layer to ship an ini wins.
     ini_dst = game_dir / INI_NAME
-    if ini_src.is_file():
+    ini_src = None
+    for s, d, _ch, _layer in plan + patch_plan:
+        if d == ini_dst:
+            ini_src = s
+    if ini_src is not None:
         write_ini(ini_src, ini_dst, args.dry_run)
 
     # ---- LCF -> XML ------------------------------------------------------
@@ -353,22 +410,23 @@ def main() -> int:
     xml_bytes = 0
     xml_skipped = 0
     cr_escaped = 0
+    converted: set[Path] = set()
     if not args.no_xml:
         try:
-            xml_files, xml_bytes, xml_skipped, cr_escaped = convert_lcf_to_xml(
+            xml_files, xml_bytes, xml_skipped, cr_escaped, converted = convert_lcf_to_xml(
                 game_dir, xml_dir, lcf2xml, args.force_xml, args.maps_limit,
                 args.no_cr_escape, args.dry_run)
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
 
-    # ---- mark LCF copies fresh -------------------------------------------
-    # `make data` rebuilds only XML edited after this extraction, so
-    # untouched maps keep their exact original binary bytes.
+    # ---- LCF timestamps --------------------------------------------------
     if not args.dry_run:
-        for _s, d, _c, _l in plan + patch_plan:
-            if d.suffix.lower() in LCF_EXTS and d.is_file():
-                os.utime(d, None)
+        stale = sync_lcf_mtimes(sorted({d for _s, d, _c, _l in plan + patch_plan}),
+                                xml_dir, converted)
+        if stale:
+            print(f"cached XML     : {stale} LCF file(s) marked for rebuild "
+                  "(run `make data`)")
 
     # ---- manifest --------------------------------------------------------
     def hash_wanted(suffix: str) -> bool:

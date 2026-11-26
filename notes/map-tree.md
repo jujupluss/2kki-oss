@@ -39,7 +39,8 @@ make map-tree     # analyse + write build/pruned/RPG_RT.emt (no changes)
 make prune-tree   # apply to xml/RPG_RT.emt and rebuild build/game/RPG_RT.lmt
 ```
 
-`--apply` writes a backup to `build/RPG_RT.emt.bak` first. Because `xml/` is
+`--apply` writes a backup to `build/RPG_RT.emt.bak` first (only if none
+exists yet, so it always holds the unpruned tree). Because `xml/` is
 derived, a fresh clone needs `make prune-tree` after `make extract`.
 `make extract` does **not** overwrite an existing `xml/RPG_RT.emt` unless you
 pass `--force-xml`, so the pruned tree survives normal extraction runs.

@@ -87,9 +87,15 @@ After editing either file run `make translate` again. Do not hand-edit
 
 - RPG Maker control codes (`\>`, `\C[n]`, `\V[n]`, `\N[n]`, `\.`, `\|`, `\^`)
   must be preserved in `msgstr`. The real-room overrides do this.
-- `\r` inside strings is normalised by the XML parser; 31 maps have such text
-  (see `notes/roundtrip.md`). Those few messages may not match the runtime
-  `msgid`.
+- Raw CR (`\r`): after the CR fix (`notes/roundtrip.md`) the XML keeps CR as
+  `&#xD;`. In 0.129h+patch1 every one of them (145 commands in 28 maps) is in
+  an editor comment, event code `12410`/`22410`, never in a message or
+  choice, so no generated `.po` contains a CR
+  (`grep -l $'\r' translation/en/*.po` finds nothing). That matters because
+  Player's `Utils::ReadLine` (`vendor/Player/src/utils.cpp`) treats a bare CR
+  as a line break and its PO parser has no `\r` escape: a CR inside a
+  `msgid` would end the line early and make `Dictionary::FromPo` raise a
+  fatal "Unterminated line" error.
 - Player's PO parser only understands `\\`, `\n` and `\"` escapes; the writer
   emits exactly those.
 - Map POs are per-map. A phrase translated in `glossary.json` appears in every

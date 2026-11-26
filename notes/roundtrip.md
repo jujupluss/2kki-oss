@@ -14,8 +14,11 @@ $ cmp Map0001.lmu <game>/Map0001.lmu             # identical
 ```
 
 `make extract` keeps the original binary LCF files in `build/game/` (copied,
-never hardlinked) and touches them afterwards, so `make data` only rebuilds
-XML files that were edited. Untouched maps stay byte-exact.
+never hardlinked). When it converts a file to XML in the same run it touches
+the LCF afterwards, so `make data` only rebuilds XML files that were edited
+and untouched maps stay byte-exact. When the XML was already there (cached,
+possibly edited), extract marks the LCF older than the XML instead, so the
+next `make data` rebuilds it rather than silently keeping the original.
 
 ## Full rebuild after the CR fix
 
